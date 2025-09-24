@@ -1,0 +1,32 @@
+version: '3.8'
+
+services:
+  casnotes:
+    build: .
+    image: casnotes:latest
+    container_name: casnotes
+    restart: unless-stopped
+    
+    ports:
+      - "64123:64123"
+    
+    volumes:
+      - casnotes_data:/data
+      - /etc/localtime:/etc/localtime:ro
+    
+    environment:
+      - DEBUG=false
+      - BIND=0.0.0.0
+      - PORT=64123
+      - ENABLE_REGISTRATION=true
+    
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:64123/healthz"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+volumes:
+  casnotes_data:
+    driver: local

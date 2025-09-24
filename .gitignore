@@ -100,4 +100,23 @@ $RECYCLE.BIN/
 **/*.rewrite.sh
 **/*.refactor.sh
 
+# Go specific
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+go.work
+casnotes
+casnotes-*
+dist/
+build/
+
+# Application specific
+data/
+*.db
+*.sqlite
+*.sqlite3
 

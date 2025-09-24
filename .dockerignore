@@ -1,0 +1,54 @@
+# Git
+.git
+.gitignore
+.gitattributes
+
+# Build artifacts  
+build/*
+!build/casnotes
+!build/casnotes-static
+!build/casnotes-alpine
+dist/
+
+# Data directories
+data/
+*.db
+*.sqlite
+*.sqlite3
+
+# Development files
+dev.sh
+docker-compose.dev.yml
+Dockerfile.dev
+.env
+.env.*
+
+# Documentation
+README.md
+docs/
+
+# CI/CD
+.github/
+Jenkinsfile
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS files
+.DS_Store
+Thumbs.db
+*.log
+
+# Go specific
+vendor/
+*.test
+coverage.out
+coverage.html
+
+# Temporary files
+*.tmp
+*.temp
+.cache/

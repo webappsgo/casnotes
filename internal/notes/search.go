@@ -47,26 +47,12 @@ func (s *SearchService) SearchNotes(userID int, query string, limit, offset int)
 
 // searchWithFTS5 uses SQLite FTS5 per CLAUDE.md
 func (s *SearchService) searchWithFTS5(userID int, query string, limit, offset int) (*SearchResult, error) {
-	// Create FTS table if it doesn't exist
-	createFTS := `
-	CREATE VIRTUAL TABLE IF NOT EXISTS notes_fts USING fts5(
-		note_id,
-		title,
-		content,
-		content=notes,
-		content_rowid=rowid
-	)`
-	s.db.Exec(createFTS)
-
-	// Sync FTS table
-	s.db.Exec("INSERT OR REPLACE INTO notes_fts(note_id, title, content) SELECT id, title, content FROM notes WHERE user_id = ?", userID)
-
-	// Search with FTS5
+	// Search with FTS5 (table created by migrations)
 	searchQuery := `
-	SELECT n.id, n.user_id, n.title, n.content, n.note_type, n.visibility, n.color, 
+	SELECT n.id, n.user_id, n.title, n.content, n.note_type, n.visibility, n.color,
 	       n.pinned, n.archived, n.encrypted, n.created_at, n.updated_at
 	FROM notes n
-	JOIN notes_fts fts ON n.id = fts.note_id
+	INNER JOIN notes_fts fts ON n.id = fts.note_id
 	WHERE n.user_id = ? AND notes_fts MATCH ? AND n.archived = false
 	ORDER BY rank
 	LIMIT ? OFFSET ?`

@@ -2,162 +2,350 @@ package compliance
 
 import (
 	"database/sql"
+	"fmt"
 	"log"
-	"strings"
 	"time"
+
+	"github.com/casapps/casnotes/internal/config"
 )
 
-// ComplianceService per CLAUDE.md Compliance System (all disabled by default)
-type ComplianceService struct {
-	db    *sql.DB
-	debug bool
+// ComplianceManager manages all compliance systems per CLAUDE.md
+type ComplianceManager struct {
+	cfg  *config.Config
+	db   *sql.DB
+	gdpr *GDPRCompliance
+	hipaa *HIPAACompliance
+	coppa *COPPACompliance
+	sox *SOXCompliance
+	ferpa *FERPACompliance
+	pci *PCIDSSCompliance
+	ccpa *CCPACompliance
+	pipeda *PIPEDACompliance
 }
 
-// ComplianceConfig per CLAUDE.md Regulation Toggles
-type ComplianceConfig struct {
-	// GDPR (EU) - disabled by default
-	GDPREnabled      bool `json:"gdpr_enabled"`
-	GDPRDataRetention int `json:"gdpr_data_retention"` // 30 days
-	
-	// HIPAA (US Healthcare) - disabled by default  
-	HIPAAEnabled        bool `json:"hipaa_enabled"`
-	HIPAASessionTimeout int  `json:"hipaa_session_timeout"` // 15 minutes
-	HIPAAAuditRetention int  `json:"hipaa_audit_retention"` // 6 years
-	
-	// COPPA (US Children) - disabled by default
-	COPPAEnabled bool `json:"coppa_enabled"`
-	COPPAMinAge  int  `json:"coppa_min_age"` // 13+
-	
-	// SOX (US Public Companies) - disabled by default
-	SOXEnabled        bool `json:"sox_enabled"`
-	SOXAuditRetention int  `json:"sox_audit_retention"` // 7 years
-	
-	// FERPA (US Education) - disabled by default
-	FERPAEnabled bool `json:"ferpa_enabled"`
-	
-	// PCI DSS (Payment Cards) - disabled by default
-	PCIDSSEnabled        bool `json:"pci_dss_enabled"`
-	PCIDSSSessionTimeout int  `json:"pci_dss_session_timeout"` // 15 minutes
-	PCIDSS2FAMandatory   bool `json:"pci_dss_2fa_mandatory"`
-	
-	// CCPA (California) - disabled by default
-	CCPAEnabled      bool `json:"ccpa_enabled"`
-	CCPADeletionDays int  `json:"ccpa_deletion_days"` // 45 days
-	
-	// PIPEDA (Canada) - disabled by default
+// ComplianceSettings stores enabled compliance regulations
+type ComplianceSettings struct {
+	GDPREnabled   bool `json:"gdpr_enabled"`
+	HIPAAEnabled  bool `json:"hipaa_enabled"`
+	COPPAEnabled  bool `json:"coppa_enabled"`
+	SOXEnabled    bool `json:"sox_enabled"`
+	FERPAEnabled  bool `json:"ferpa_enabled"`
+	PCIDSSEnabled bool `json:"pci_dss_enabled"`
+	CCPAEnabled   bool `json:"ccpa_enabled"`
 	PIPEDAEnabled bool `json:"pipeda_enabled"`
 }
 
-func NewComplianceService(db *sql.DB, debug bool) *ComplianceService {
-	service := &ComplianceService{
-		db:    db,
-		debug: debug,
-	}
-	
-	// Create audit log table
-	service.ensureAuditTable()
-	
-	return service
+// AuditLog represents an audit trail entry
+type AuditLog struct {
+	ID         int       `json:"id"`
+	UserID     int       `json:"user_id"`
+	Action     string    `json:"action"`
+	Resource   string    `json:"resource"`
+	Details    string    `json:"details"`
+	IPAddress  string    `json:"ip_address"`
+	UserAgent  string    `json:"user_agent"`
+	Timestamp  time.Time `json:"timestamp"`
+	Regulation string    `json:"regulation"`
 }
 
-// GetConfig returns current compliance configuration per CLAUDE.md
-func (s *ComplianceService) GetConfig() *ComplianceConfig {
-	config := &ComplianceConfig{
-		// All disabled by default per CLAUDE.md
-		GDPRDataRetention:     30,
-		HIPAASessionTimeout:   15,
-		HIPAAAuditRetention:   6 * 365, // 6 years
-		COPPAMinAge:          13,
-		SOXAuditRetention:    7 * 365, // 7 years  
-		PCIDSSSessionTimeout: 15,
-		CCPADeletionDays:     45,
-	}
-
-	// Load from database
-	settings := map[string]*bool{
-		"compliance_gdpr_enabled":     &config.GDPREnabled,
-		"compliance_hipaa_enabled":    &config.HIPAAEnabled,
-		"compliance_coppa_enabled":    &config.COPPAEnabled,
-		"compliance_sox_enabled":      &config.SOXEnabled,
-		"compliance_ferpa_enabled":    &config.FERPAEnabled,
-		"compliance_pci_dss_enabled":  &config.PCIDSSEnabled,
-		"compliance_ccpa_enabled":     &config.CCPAEnabled,
-		"compliance_pipeda_enabled":   &config.PIPEDAEnabled,
-	}
-
-	for key, setting := range settings {
-		var value string
-		err := s.db.QueryRow("SELECT value FROM settings WHERE key = ?", key).Scan(&value)
-		if err == nil {
-			*setting = parseBool(value)
-		}
-	}
-
-	return config
-}
-
-// IsEnabled checks if any compliance is active per CLAUDE.md
-func (s *ComplianceService) IsEnabled() bool {
-	config := s.GetConfig()
-	return config.GDPREnabled || config.HIPAAEnabled || config.COPPAEnabled ||
-		config.SOXEnabled || config.FERPAEnabled || config.PCIDSSEnabled ||
-		config.CCPAEnabled || config.PIPEDAEnabled
-}
-
-// LogAuditEvent per CLAUDE.md audit trail
-func (s *ComplianceService) LogAuditEvent(userID *int, action, resourceType, resourceID, details, ipAddress, userAgent string) {
-	if !s.IsEnabled() {
-		return // No audit logging if compliance disabled
-	}
-
-	_, err := s.db.Exec(`
-		INSERT INTO audit_log (user_id, action, resource_type, resource_id, details, ip_address, user_agent, created_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)`,
-		userID, action, resourceType, resourceID, details, ipAddress, userAgent)
-	
-	if err != nil && s.debug {
-		log.Printf("Audit log error: %v", err)
+// NewComplianceManager creates compliance manager
+func NewComplianceManager(cfg *config.Config, db *sql.DB) *ComplianceManager {
+	return &ComplianceManager{
+		cfg:    cfg,
+		db:     db,
+		gdpr:   NewGDPRCompliance(cfg, db),
+		hipaa:  NewHIPAACompliance(cfg, db),
+		coppa:  NewCOPPACompliance(cfg, db),
+		sox:    NewSOXCompliance(cfg, db),
+		ferpa:  NewFERPACompliance(cfg, db),
+		pci:    NewPCIDSSCompliance(cfg, db),
+		ccpa:   NewCCPACompliance(cfg, db),
+		pipeda: NewPIPEDACompliance(cfg, db),
 	}
 }
 
-// GetSessionTimeout per CLAUDE.md compliance requirements
-func (s *ComplianceService) GetSessionTimeout() time.Duration {
-	config := s.GetConfig()
-	
-	// HIPAA and PCI DSS require 15-minute timeouts per CLAUDE.md
-	if config.HIPAAEnabled || config.PCIDSSEnabled {
-		return 15 * time.Minute
+// GetSettings retrieves current compliance settings
+func (m *ComplianceManager) GetSettings() (*ComplianceSettings, error) {
+	settings := &ComplianceSettings{}
+
+	var err error
+	settings.GDPREnabled, err = m.getBoolSetting("compliance_gdpr")
+	if err != nil {
+		return nil, err
 	}
-	
-	// Default 7 days per CLAUDE.md
-	return 7 * 24 * time.Hour
+
+	settings.HIPAAEnabled, err = m.getBoolSetting("compliance_hipaa")
+	if err != nil {
+		return nil, err
+	}
+
+	settings.COPPAEnabled, err = m.getBoolSetting("compliance_coppa")
+	if err != nil {
+		return nil, err
+	}
+
+	settings.SOXEnabled, err = m.getBoolSetting("compliance_sox")
+	if err != nil {
+		return nil, err
+	}
+
+	settings.FERPAEnabled, err = m.getBoolSetting("compliance_ferpa")
+	if err != nil {
+		return nil, err
+	}
+
+	settings.PCIDSSEnabled, err = m.getBoolSetting("compliance_pci_dss")
+	if err != nil {
+		return nil, err
+	}
+
+	settings.CCPAEnabled, err = m.getBoolSetting("compliance_ccpa")
+	if err != nil {
+		return nil, err
+	}
+
+	settings.PIPEDAEnabled, err = m.getBoolSetting("compliance_pipeda")
+	if err != nil {
+		return nil, err
+	}
+
+	return settings, nil
 }
 
-// ensureAuditTable creates audit log table
-func (s *ComplianceService) ensureAuditTable() {
-	auditSchema := `
-	CREATE TABLE IF NOT EXISTS audit_log (
-		id INTEGER PRIMARY KEY AUTOINCREMENT,
-		user_id INTEGER,
-		action TEXT NOT NULL,
-		resource_type TEXT,
-		resource_id TEXT,
-		details TEXT,
-		ip_address TEXT,
-		user_agent TEXT,
-		created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-		FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE SET NULL
-	)`
-	
-	s.db.Exec(auditSchema)
+// getBoolSetting retrieves a boolean setting
+func (m *ComplianceManager) getBoolSetting(key string) (bool, error) {
+	var value string
+	err := m.db.QueryRow("SELECT COALESCE(value, 'false') FROM settings WHERE key = ?", key).Scan(&value)
+	if err == sql.ErrNoRows {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+
+	return parseBool(value), nil
 }
 
-// parseBool per CLAUDE.md Boolean Value Support
+// parseBool parses boolean per CLAUDE.md Boolean Value Support
 func parseBool(value string) bool {
-	switch strings.ToLower(strings.TrimSpace(value)) {
+	switch value {
 	case "true", "yes", "on", "enable", "enabled", "active", "1", "t", "y":
 		return true
 	default:
 		return false
 	}
+}
+
+// LogAudit creates an audit log entry
+func (m *ComplianceManager) LogAudit(userID int, action, resource, details, ipAddress, userAgent, regulation string) error {
+	query := `
+		INSERT INTO audit_logs (user_id, action, resource, details, ip_address, user_agent, regulation, timestamp)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+	`
+
+	_, err := m.db.Exec(query, userID, action, resource, details, ipAddress, userAgent, regulation, time.Now())
+	if err != nil {
+		log.Printf("Failed to create audit log: %v", err)
+		return err
+	}
+
+	return nil
+}
+
+// GetAuditLogs retrieves audit logs with optional filtering
+func (m *ComplianceManager) GetAuditLogs(userID int, regulation string, limit int) ([]*AuditLog, error) {
+	query := `
+		SELECT id, user_id, action, resource, details, ip_address, user_agent, regulation, timestamp
+		FROM audit_logs
+		WHERE 1=1
+	`
+
+	args := []interface{}{}
+	if userID > 0 {
+		query += " AND user_id = ?"
+		args = append(args, userID)
+	}
+
+	if regulation != "" {
+		query += " AND regulation = ?"
+		args = append(args, regulation)
+	}
+
+	query += " ORDER BY timestamp DESC"
+
+	if limit > 0 {
+		query += " LIMIT ?"
+		args = append(args, limit)
+	}
+
+	rows, err := m.db.Query(query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var logs []*AuditLog
+	for rows.Next() {
+		var log AuditLog
+		err := rows.Scan(
+			&log.ID,
+			&log.UserID,
+			&log.Action,
+			&log.Resource,
+			&log.Details,
+			&log.IPAddress,
+			&log.UserAgent,
+			&log.Regulation,
+			&log.Timestamp,
+		)
+		if err != nil {
+			continue
+		}
+		logs = append(logs, &log)
+	}
+
+	return logs, nil
+}
+
+// CleanupAuditLogs removes old audit logs based on retention policy
+func (m *ComplianceManager) CleanupAuditLogs() error {
+	settings, err := m.GetSettings()
+	if err != nil {
+		return err
+	}
+
+	// Default retention: 90 days
+	retentionDays := 90
+
+	// HIPAA requires 6 years
+	if settings.HIPAAEnabled {
+		retentionDays = 6 * 365
+	}
+
+	// SOX requires 7 years
+	if settings.SOXEnabled {
+		retentionDays = 7 * 365
+	}
+
+	// Delete logs older than retention period
+	cutoff := time.Now().AddDate(0, 0, -retentionDays)
+	_, err = m.db.Exec("DELETE FROM audit_logs WHERE timestamp < ?", cutoff)
+
+	return err
+}
+
+// ValidateCompliance checks if system meets enabled compliance requirements
+func (m *ComplianceManager) ValidateCompliance() error {
+	settings, err := m.GetSettings()
+	if err != nil {
+		return err
+	}
+
+	var errors []string
+
+	if settings.GDPREnabled {
+		if err := m.gdpr.Validate(); err != nil {
+			errors = append(errors, fmt.Sprintf("GDPR: %v", err))
+		}
+	}
+
+	if settings.HIPAAEnabled {
+		if err := m.hipaa.Validate(); err != nil {
+			errors = append(errors, fmt.Sprintf("HIPAA: %v", err))
+		}
+	}
+
+	if settings.COPPAEnabled {
+		if err := m.coppa.Validate(); err != nil {
+			errors = append(errors, fmt.Sprintf("COPPA: %v", err))
+		}
+	}
+
+	if settings.SOXEnabled {
+		if err := m.sox.Validate(); err != nil {
+			errors = append(errors, fmt.Sprintf("SOX: %v", err))
+		}
+	}
+
+	if settings.FERPAEnabled {
+		if err := m.ferpa.Validate(); err != nil {
+			errors = append(errors, fmt.Sprintf("FERPA: %v", err))
+		}
+	}
+
+	if settings.PCIDSSEnabled {
+		if err := m.pci.Validate(); err != nil {
+			errors = append(errors, fmt.Sprintf("PCI DSS: %v", err))
+		}
+	}
+
+	if settings.CCPAEnabled {
+		if err := m.ccpa.Validate(); err != nil {
+			errors = append(errors, fmt.Sprintf("CCPA: %v", err))
+		}
+	}
+
+	if settings.PIPEDAEnabled {
+		if err := m.pipeda.Validate(); err != nil {
+			errors = append(errors, fmt.Sprintf("PIPEDA: %v", err))
+		}
+	}
+
+	if len(errors) > 0 {
+		return fmt.Errorf("compliance validation failed: %v", errors)
+	}
+
+	return nil
+}
+
+// GetSessionTimeout returns session timeout based on compliance requirements
+func (m *ComplianceManager) GetSessionTimeout() time.Duration {
+	settings, err := m.GetSettings()
+	if err != nil {
+		return 7 * 24 * time.Hour // Default 7 days
+	}
+
+	// HIPAA and PCI DSS require 15-minute timeout
+	if settings.HIPAAEnabled || settings.PCIDSSEnabled {
+		return 15 * time.Minute
+	}
+
+	return 7 * 24 * time.Hour
+}
+
+// RequireEncryption checks if encryption is mandatory
+func (m *ComplianceManager) RequireEncryption() bool {
+	settings, err := m.GetSettings()
+	if err != nil {
+		return false
+	}
+
+	// HIPAA requires encryption
+	return settings.HIPAAEnabled
+}
+
+// Require2FA checks if 2FA is mandatory
+func (m *ComplianceManager) Require2FA() bool {
+	settings, err := m.GetSettings()
+	if err != nil {
+		return false
+	}
+
+	// PCI DSS requires 2FA
+	return settings.PCIDSSEnabled
+}
+
+// GetPasswordRotationDays returns password rotation requirement
+func (m *ComplianceManager) GetPasswordRotationDays() int {
+	settings, err := m.GetSettings()
+	if err != nil {
+		return 0 // No rotation required
+	}
+
+	// HIPAA and PCI DSS require 90-day rotation
+	if settings.HIPAAEnabled || settings.PCIDSSEnabled {
+		return 90
+	}
+
+	return 0
 }

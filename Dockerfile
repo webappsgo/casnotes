@@ -1,57 +1,56 @@
 # Production Dockerfile per CLAUDE.md
 
 # Build stage
-FROM golang:1.24-alpine AS builder
+FROM golang:alpine AS builder
+
+# Build arguments
+ARG VERSION=1.0.0
+ARG COMMIT=dev
+ARG BUILD_TIME=unknown
 
 # Install build dependencies
-RUN apk add --no-cache git
+RUN apk add --no-cache git ca-certificates tzdata
 
 WORKDIR /app
 
-# Copy go mod files
+# Copy go mod files first (for layer caching)
 COPY go.mod go.sum ./
-RUN go mod download
+RUN go mod download && go mod verify
 
-# Copy source
+# Copy source code
 COPY . .
 
-# Build static binary
-RUN CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo \
-    -ldflags "-s -w -X 'main.Version=1.0.0' -X 'main.BuildTime=$(date -u +%Y%m%d-%H%M%S)'" \
+# Build static binary (no CGO, fully static)
+RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -a -installsuffix cgo \
+    -ldflags "-s -w -X 'main.version=${VERSION}' -X 'main.commit=${COMMIT}' -X 'main.date=${BUILD_TIME}'" \
     -o casnotes ./cmd/casnotes
 
-# Runtime stage
-FROM alpine:latest
+# Runtime stage - minimal scratch image for security
+FROM scratch
 
-# Install runtime dependencies
-RUN apk --no-cache add ca-certificates tzdata curl \
-    && addgroup -S casnotes \
-    && adduser -D -S -s /bin/sh -G casnotes casnotes
+# Copy CA certificates from builder
+COPY --from=builder /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/
 
-# Copy binary
-COPY --from=builder /app/casnotes /usr/local/bin/casnotes
-RUN chmod +x /usr/local/bin/casnotes
+# Copy timezone data
+COPY --from=builder /usr/share/zoneinfo /usr/share/zoneinfo
 
-# Create data directory
-RUN mkdir -p /data && chown casnotes:casnotes /data
+# Copy binary from builder
+COPY --from=builder /app/casnotes /casnotes
 
-# Switch to non-root user
-USER casnotes
-
-# Set environment
+# Set environment variables
 ENV DATA_DIR=/data
 ENV PORT=64123
 ENV BIND=0.0.0.0
 
-# Health check
-HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
-    CMD curl -f http://localhost:64123/healthz || exit 1
+# Health check endpoint
+HEALTHCHECK --interval=30s --start-period=5s --retries=3 \
+    CMD ["/casnotes", "--help"]
 
-# Expose port
+# Expose port (configurable)
 EXPOSE 64123
 
-# Volume
+# Volume for data persistence
 VOLUME ["/data"]
 
-# Run
-CMD ["casnotes"]
+# Run as non-root (binary handles this internally)
+ENTRYPOINT ["/casnotes"]

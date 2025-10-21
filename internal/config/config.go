@@ -2,11 +2,13 @@ package config
 
 import (
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"runtime"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // Config per CLAUDE.md Environment Variables section
@@ -28,6 +30,9 @@ type Config struct {
 	// Platform detection
 	IsContainer bool
 	IsElevated  bool
+
+	// Internal
+	logger *slog.Logger
 }
 
 // Load configuration per CLAUDE.md spec
@@ -76,7 +81,60 @@ func Load(debug bool) (*Config, error) {
 	cfg.EnableRegistration = parseBool(os.Getenv("ENABLE_REGISTRATION"), true)
 	cfg.RequireEmailVerif = parseBool(os.Getenv("REQUIRE_EMAIL_VERIFICATION"), false)
 
+	// Initialize logger
+	cfg.initLogger()
+
 	return cfg, nil
+}
+
+// Logger returns the configured logger
+func (c *Config) Logger() *slog.Logger {
+	if c.logger == nil {
+		c.initLogger()
+	}
+	return c.logger
+}
+
+// initLogger initializes the structured logger
+func (c *Config) initLogger() {
+	level := slog.LevelInfo
+	if c.Debug {
+		level = slog.LevelDebug
+	}
+
+	handler := slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{
+		Level: level,
+	})
+	c.logger = slog.New(handler)
+}
+
+// DatabaseDriver returns the database driver name (sqlite, postgres, mysql)
+func (c *Config) DatabaseDriver() string {
+	if strings.HasPrefix(c.DatabaseURL, "sqlite://") || strings.HasPrefix(c.DatabaseURL, "sqlite3://") {
+		return "sqlite"
+	}
+	if strings.HasPrefix(c.DatabaseURL, "postgresql://") || strings.HasPrefix(c.DatabaseURL, "postgres://") {
+		return "postgres"
+	}
+	if strings.HasPrefix(c.DatabaseURL, "mysql://") || strings.HasPrefix(c.DatabaseURL, "mariadb://") {
+		return "mysql"
+	}
+	return "sqlite"
+}
+
+// RepoPath returns the path to the Git repository
+func (c *Config) RepoPath() string {
+	return filepath.Join(c.DataDir, "repo")
+}
+
+// BindAddress returns the full bind address (host:port)
+func (c *Config) BindAddress() string {
+	return fmt.Sprintf("%s:%s", c.Host, c.Port)
+}
+
+// ShutdownGracePeriod returns the grace period for shutdown (30s per CLAUDE.md)
+func (c *Config) ShutdownGracePeriod() time.Duration {
+	return 30 * time.Second
 }
 
 // detectContainer per CLAUDE.md Container Detection section

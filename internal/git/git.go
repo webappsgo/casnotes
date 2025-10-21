@@ -22,6 +22,11 @@ type GitService struct {
 	debug    bool
 }
 
+// New creates a new git repository service
+func New(repoPath string) (*GitService, error) {
+	return NewGitService(filepath.Dir(repoPath), false)
+}
+
 // NewGitService per CLAUDE.md Storage Structure
 func NewGitService(dataDir string, debug bool) (*GitService, error) {
 	repoPath := filepath.Join(dataDir, "repo")

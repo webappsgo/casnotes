@@ -18,6 +18,11 @@ type Database struct {
 	config *config.Config
 }
 
+// New creates database per CLAUDE.md Multi-Database Support
+func New(cfg *config.Config) (*Database, error) {
+	return Initialize(cfg)
+}
+
 // Initialize creates database per CLAUDE.md Multi-Database Support
 func Initialize(cfg *config.Config) (*Database, error) {
 	db := &Database{config: cfg}
@@ -53,16 +58,16 @@ func Initialize(cfg *config.Config) (*Database, error) {
 		return nil, fmt.Errorf("failed to enable foreign keys: %v", err)
 	}
 
-	// Run migrations per CLAUDE.md Migration System
-	if err := db.migrate(); err != nil {
-		return nil, fmt.Errorf("failed to run migrations: %v", err)
-	}
-
 	if cfg.Debug {
 		log.Printf("Database initialized: %s", dbType)
 	}
 
 	return db, nil
+}
+
+// Migrate runs database migrations
+func (db *Database) Migrate() error {
+	return db.migrate()
 }
 
 func (db *Database) Close() error {
@@ -120,6 +125,9 @@ func (db *Database) migrate() error {
 		is_admin BOOLEAN DEFAULT FALSE,
 		is_active BOOLEAN DEFAULT TRUE,
 		email_verified BOOLEAN DEFAULT FALSE,
+		totp_secret TEXT,
+		totp_enabled BOOLEAN DEFAULT FALSE,
+		deletion_requested_at DATETIME,
 		created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
 		updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
 	);
@@ -227,11 +235,62 @@ func (db *Database) migrate() error {
 		FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE
 	);
 
+	-- Attachments per CLAUDE.md (max 25MB, 10 per note)
+	CREATE TABLE IF NOT EXISTS attachments (
+		id TEXT PRIMARY KEY,
+		note_id TEXT NOT NULL,
+		filename TEXT NOT NULL,
+		mime_type TEXT NOT NULL,
+		size INTEGER NOT NULL,
+		hash TEXT NOT NULL,
+		path TEXT NOT NULL,
+		created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+		FOREIGN KEY (note_id) REFERENCES notes (id) ON DELETE CASCADE
+	);
+
+	-- Certificates per CLAUDE.md Certificate Management
+	CREATE TABLE IF NOT EXISTS certificates (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		domain TEXT NOT NULL UNIQUE,
+		cert_path TEXT NOT NULL,
+		key_path TEXT NOT NULL,
+		not_before DATETIME NOT NULL,
+		not_after DATETIME NOT NULL,
+		issuer TEXT,
+		method TEXT CHECK (method IN ('http-01', 'dns-01', 'tls-alpn-01')),
+		auto_renew BOOLEAN DEFAULT TRUE,
+		created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+		renewed_at DATETIME
+	);
+
+	-- Audit logs per CLAUDE.md Compliance System
+	CREATE TABLE IF NOT EXISTS audit_logs (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		user_id INTEGER NOT NULL,
+		action TEXT NOT NULL,
+		resource TEXT NOT NULL,
+		details TEXT,
+		ip_address TEXT,
+		user_agent TEXT,
+		regulation TEXT,
+		timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
+		FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE
+	);
+
 	-- Indexes for performance
 	CREATE INDEX IF NOT EXISTS idx_users_email ON users (email);
 	CREATE INDEX IF NOT EXISTS idx_users_username ON users (username);
 	CREATE INDEX IF NOT EXISTS idx_notes_user_id ON notes (user_id);
 	CREATE INDEX IF NOT EXISTS idx_notes_updated_at ON notes (updated_at);
+	CREATE INDEX IF NOT EXISTS idx_attachments_note_id ON attachments (note_id);
+
+	-- FTS5 search index per CLAUDE.md Search (SQLite FTS5)
+	CREATE VIRTUAL TABLE IF NOT EXISTS notes_fts USING fts5(
+		note_id UNINDEXED,
+		title,
+		content,
+		tokenize='porter unicode61'
+	);
 	`
 
 	_, err := db.conn.Exec(schema)
@@ -241,7 +300,7 @@ func (db *Database) migrate() error {
 
 	// Insert default settings per CLAUDE.md Default Configuration
 	defaultSettings := `
-	INSERT OR IGNORE INTO settings (key, value) VALUES 
+	INSERT OR IGNORE INTO settings (key, value) VALUES
 	('app_name', 'casnotes'),
 	('app_version', '1.0.0'),
 	('allow_registration', 'true'),
@@ -250,7 +309,15 @@ func (db *Database) migrate() error {
 	('max_attachment_size', '26214400'),
 	('user_quota', '5368709120'),
 	('theme', 'dark'),
-	('timezone', 'America/New_York');`
+	('timezone', 'America/New_York'),
+	('compliance_gdpr', 'false'),
+	('compliance_hipaa', 'false'),
+	('compliance_coppa', 'false'),
+	('compliance_sox', 'false'),
+	('compliance_ferpa', 'false'),
+	('compliance_pci_dss', 'false'),
+	('compliance_ccpa', 'false'),
+	('compliance_pipeda', 'false');`
 
 	_, err = db.conn.Exec(defaultSettings)
 	if err != nil {

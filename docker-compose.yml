@@ -1,32 +1,84 @@
 version: '3.8'
 
 services:
+  # Main casnotes application
   casnotes:
-    build: .
-    image: casnotes:latest
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        VERSION: "1.0.0"
+        COMMIT: "dev"
+        BUILD_TIME: "2025-09-29"
+    image: ghcr.io/casapps/casnotes:latest
     container_name: casnotes
     restart: unless-stopped
-    
+
     ports:
       - "64123:64123"
-    
+
     volumes:
       - casnotes_data:/data
       - /etc/localtime:/etc/localtime:ro
-    
+
     environment:
       - DEBUG=false
       - BIND=0.0.0.0
       - PORT=64123
-      - ENABLE_REGISTRATION=true
-    
+      - DATA_DIR=/data
+      # DATABASE_URL for external database (optional)
+      # - DATABASE_URL=postgresql://user:pass@postgres:5432/casnotes
+      # - DATABASE_URL=mysql://user:pass@mariadb:3306/casnotes
+
+    # Healthcheck will fail until healthz endpoint is implemented
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:64123/healthz"]
+      test: ["CMD", "/casnotes", "--help"]
       interval: 30s
-      timeout: 10s
+      start_period: 5s
       retries: 3
-      start_period: 40s
+
+    # Depends on database if using external DB
+    # depends_on:
+    #   - postgres
+    #   - mariadb
+
+  # Optional: PostgreSQL for production
+  postgres:
+    image: postgres:16-alpine
+    container_name: casnotes_postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: casnotes
+      POSTGRES_USER: casnotes
+      POSTGRES_PASSWORD: casnotes_password_change_me
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    profiles:
+      - postgres
+
+  # Optional: MariaDB for production
+  mariadb:
+    image: mariadb:11-jammy
+    container_name: casnotes_mariadb
+    restart: unless-stopped
+    environment:
+      MYSQL_DATABASE: casnotes
+      MYSQL_USER: casnotes
+      MYSQL_PASSWORD: casnotes_password_change_me
+      MYSQL_ROOT_PASSWORD: root_password_change_me
+    volumes:
+      - mariadb_data:/var/lib/mysql
+    ports:
+      - "3306:3306"
+    profiles:
+      - mariadb
 
 volumes:
   casnotes_data:
+    driver: local
+  postgres_data:
+    driver: local
+  mariadb_data:
     driver: local

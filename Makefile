@@ -9,7 +9,7 @@ COMMIT := $(shell git rev-parse --short HEAD 2>/dev/null || echo "dev")
 BUILD_TIME := $(shell date -u +%Y%m%d-%H%M%S)
 
 # Build flags per CLAUDE.md
-LDFLAGS := -ldflags "-s -w -X 'main.Version=$(VERSION)' -X 'main.Commit=$(COMMIT)' -X 'main.BuildTime=$(BUILD_TIME)'"
+LDFLAGS := -ldflags "-s -w -X 'main.version=$(VERSION)' -X 'main.commit=$(COMMIT)' -X 'main.date=$(BUILD_TIME)'"
 
 # Platform targets per CLAUDE.md
 PLATFORMS := linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64 windows/arm64

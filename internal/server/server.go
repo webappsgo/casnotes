@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/casapps/casnotes/internal/auth"
+	"github.com/casapps/casnotes/internal/backup"
 	"github.com/casapps/casnotes/internal/config"
 	"github.com/casapps/casnotes/internal/database"
 	"github.com/casapps/casnotes/internal/notes"
@@ -32,23 +33,20 @@ type Server struct {
 }
 
 // New creates server instance
-func New(cfg *config.Config, db *database.Database) (*Server, error) {
+func New(cfg *config.Config, db *database.Database, gitService *git.GitService) *Server {
 	// Initialize services per CLAUDE.md
 	authService := auth.NewAuthService(db.DB(), "casnotes-secret-key-"+cfg.DataDir)
 	notesService := notes.NewNotesService(db.DB())
-	
-	// Initialize Git service per CLAUDE.md Git Sync
-	gitService, err := git.NewGitService(cfg.DataDir, cfg.Debug)
-	if err != nil {
-		return nil, fmt.Errorf("failed to initialize Git service: %v", err)
-	}
-	
+
+	// Initialize backup service per CLAUDE.md
+	backupService := backup.NewBackupService(cfg, db.DB())
+
 	// Initialize scheduler per CLAUDE.md Built-in Scheduler
-	schedulerService := scheduler.NewScheduler(db.DB(), gitService, cfg.Debug)
-	
+	schedulerService := scheduler.NewScheduler(db.DB(), gitService, backupService, cfg.Debug)
+
 	// Initialize rate limiter per CLAUDE.md Rate Limiting
 	rateLimiterService := ratelimit.NewRateLimiter()
-	
+
 	// Initialize auth middleware
 	authMiddleware := auth.NewAuthMiddleware(authService)
 	
@@ -76,7 +74,7 @@ func New(cfg *config.Config, db *database.Database) (*Server, error) {
 		IdleTimeout:  120 * time.Second,
 	}
 
-	return s, nil
+	return s
 }
 
 func (s *Server) Start() error {
@@ -162,52 +160,8 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
-	if r.URL.Path != "/" {
-		http.NotFound(w, r)
-		return
-	}
 
-	// Landing page per CLAUDE.md with dark theme
-	html := `<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>casnotes - Self-hosted Notes</title>
-    <style>
-        body { 
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-            max-width: 800px; margin: 50px auto; padding: 20px;
-            background: #1a1a1a; color: #e0e0e0;
-        }
-        h1 { color: #4CAF50; }
-        .card { 
-            background: #2d2d2d; padding: 20px; border-radius: 8px; 
-            margin: 20px 0; border: 1px solid #404040;
-        }
-        .status { color: #4CAF50; }
-        a { color: #64B5F6; text-decoration: none; }
-        a:hover { text-decoration: underline; }
-    </style>
-</head>
-<body>
-    <h1>🗒️ casnotes v1.0.0</h1>
-    <div class="card">
-        <h2>Self-hosted, Git-powered note-taking application</h2>
-        <p class="status">✅ Server Status: Running</p>
-        <p>Features: Markdown notes, Code snippets, Git versioning, Full-text search</p>
-    </div>
-    <div class="card">
-        <h3>Quick Links</h3>
-        <p><a href="/login">Login</a> | <a href="/register">Register</a> | <a href="/api/v1/">API</a> | <a href="/healthz">Health</a></p>
-    </div>
-</body>
-</html>`
-
-	w.Header().Set("Content-Type", "text/html")
-	w.Write([]byte(html))
-}
+// UI handlers implemented in handlers.go
 
 func (s *Server) handleAPI(w http.ResponseWriter, r *http.Request) {
 	// API discovery per CLAUDE.md
@@ -218,7 +172,7 @@ func (s *Server) handleAPI(w http.ResponseWriter, r *http.Request) {
 		"endpoints": map[string]string{
 			"auth":      "/api/v1/auth",
 			"users":     "/api/v1/users",
-			"notes":     "/api/v1/notes", 
+			"notes":     "/api/v1/notes",
 			"tags":      "/api/v1/tags",
 			"notebooks": "/api/v1/notebooks",
 			"search":    "/api/v1/search",
@@ -226,646 +180,28 @@ func (s *Server) handleAPI(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// Placeholder handlers (will implement with auth)
-func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
-	// Login page per CLAUDE.md User Interface with dark theme
-	html := `<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Login - casnotes</title>
-    <style>
-        body { 
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-            background: #1a1a1a; color: #e0e0e0; margin: 0; padding: 0;
-            display: flex; justify-content: center; align-items: center; min-height: 100vh;
-        }
-        .login-container { 
-            background: #2d2d2d; padding: 40px; border-radius: 8px; 
-            box-shadow: 0 4px 6px rgba(0,0,0,0.3); width: 100%; max-width: 400px;
-        }
-        h1 { text-align: center; color: #4CAF50; margin-bottom: 30px; }
-        .form-group { margin-bottom: 20px; }
-        label { display: block; margin-bottom: 5px; color: #ccc; }
-        input { 
-            width: 100%; padding: 12px; border: 1px solid #555; 
-            border-radius: 4px; background: #1a1a1a; color: #e0e0e0; box-sizing: border-box;
-        }
-        input:focus { outline: none; border-color: #4CAF50; }
-        button { 
-            width: 100%; padding: 12px; background: #4CAF50; color: white; 
-            border: none; border-radius: 4px; cursor: pointer; font-size: 16px; 
-        }
-        button:hover { background: #45a049; }
-        .links { text-align: center; margin-top: 20px; }
-        .links a { color: #64B5F6; text-decoration: none; margin: 0 10px; }
-        .error { color: #f44336; margin-bottom: 15px; display: none; }
-    </style>
-</head>
-<body>
-    <div class="login-container">
-        <h1>🗒️ casnotes</h1>
-        <div id="error" class="error"></div>
-        <form id="loginForm">
-            <div class="form-group">
-                <label for="username">Username or Email</label>
-                <input type="text" id="username" name="username" required>
-            </div>
-            <div class="form-group">
-                <label for="password">Password</label>
-                <input type="password" id="password" name="password" required>
-            </div>
-            <button type="submit">Login</button>
-        </form>
-        <div class="links">
-            <a href="/register">Create Account</a>
-            <a href="/">Back to Home</a>
-        </div>
-    </div>
-    
-    <script>
-    document.getElementById('loginForm').addEventListener('submit', async (e) => {
-        e.preventDefault();
-        const formData = new FormData(e.target);
-        const data = Object.fromEntries(formData.entries());
-        
-        try {
-            const response = await fetch('/api/v1/auth/login', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(data)
-            });
-            
-            const result = await response.json();
-            if (result.success) {
-                localStorage.setItem('casnotes_token', result.token);
-                window.location.href = '/users';
-            } else {
-                document.getElementById('error').textContent = 'Invalid credentials';
-                document.getElementById('error').style.display = 'block';
-            }
-        } catch (err) {
-            document.getElementById('error').textContent = 'Network error';
-            document.getElementById('error').style.display = 'block';
-        }
-    });
-    </script>
-</body>
-</html>`
-
-	w.Header().Set("Content-Type", "text/html")
-	w.Write([]byte(html))
-}
-
-func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
-	// Registration page per CLAUDE.md with dark theme
-	html := `<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Register - casnotes</title>
-    <style>
-        body { 
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-            background: #1a1a1a; color: #e0e0e0; margin: 0; padding: 0;
-            display: flex; justify-content: center; align-items: center; min-height: 100vh;
-        }
-        .register-container { 
-            background: #2d2d2d; padding: 40px; border-radius: 8px; 
-            box-shadow: 0 4px 6px rgba(0,0,0,0.3); width: 100%; max-width: 400px;
-        }
-        h1 { text-align: center; color: #4CAF50; margin-bottom: 30px; }
-        .form-group { margin-bottom: 20px; }
-        label { display: block; margin-bottom: 5px; color: #ccc; }
-        input { 
-            width: 100%; padding: 12px; border: 1px solid #555; 
-            border-radius: 4px; background: #1a1a1a; color: #e0e0e0; box-sizing: border-box;
-        }
-        input:focus { outline: none; border-color: #4CAF50; }
-        button { 
-            width: 100%; padding: 12px; background: #4CAF50; color: white; 
-            border: none; border-radius: 4px; cursor: pointer; font-size: 16px; 
-        }
-        button:hover { background: #45a049; }
-        .links { text-align: center; margin-top: 20px; }
-        .links a { color: #64B5F6; text-decoration: none; margin: 0 10px; }
-        .error { color: #f44336; margin-bottom: 15px; display: none; }
-        .success { color: #4CAF50; margin-bottom: 15px; display: none; }
-        small { color: #aaa; }
-    </style>
-</head>
-<body>
-    <div class="register-container">
-        <h1>🗒️ casnotes</h1>
-        <h2 style="text-align: center; margin-bottom: 20px;">Create Account</h2>
-        <div id="error" class="error"></div>
-        <div id="success" class="success"></div>
-        <form id="registerForm">
-            <div class="form-group">
-                <label for="username">Username</label>
-                <input type="text" id="username" name="username" required>
-            </div>
-            <div class="form-group">
-                <label for="email">Email</label>
-                <input type="email" id="email" name="email" required>
-            </div>
-            <div class="form-group">
-                <label for="first_name">First Name</label>
-                <input type="text" id="first_name" name="first_name">
-            </div>
-            <div class="form-group">
-                <label for="last_name">Last Name</label>
-                <input type="text" id="last_name" name="last_name">
-            </div>
-            <div class="form-group">
-                <label for="password">Password</label>
-                <input type="password" id="password" name="password" required minlength="8">
-                <small>Minimum 8 characters per CLAUDE.md</small>
-            </div>
-            <div class="form-group">
-                <label for="password_confirm">Confirm Password</label>
-                <input type="password" id="password_confirm" name="password_confirm" required>
-            </div>
-            <button type="submit">Create Account</button>
-        </form>
-        <div class="links">
-            <a href="/login">Sign In</a>
-            <a href="/">Back to Home</a>
-        </div>
-    </div>
-    
-    <script>
-    document.getElementById('registerForm').addEventListener('submit', async (e) => {
-        e.preventDefault();
-        const formData = new FormData(e.target);
-        const data = Object.fromEntries(formData.entries());
-        
-        // Validate passwords match
-        if (data.password !== data.password_confirm) {
-            document.getElementById('error').textContent = 'Passwords do not match';
-            document.getElementById('error').style.display = 'block';
-            return;
-        }
-        
-        delete data.password_confirm;
-        
-        try {
-            const response = await fetch('/api/v1/auth/register', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(data)
-            });
-            
-            const result = await response.json();
-            if (result.success) {
-                document.getElementById('success').textContent = 'Account created! Redirecting...';
-                document.getElementById('success').style.display = 'block';
-                document.getElementById('error').style.display = 'none';
-                
-                localStorage.setItem('casnotes_token', result.token);
-                setTimeout(() => window.location.href = '/users', 1500);
-            } else {
-                document.getElementById('error').textContent = result.message || 'Registration failed';
-                document.getElementById('error').style.display = 'block';
-            }
-        } catch (err) {
-            document.getElementById('error').textContent = 'Network error';
-            document.getElementById('error').style.display = 'block';
-        }
-    });
-    </script>
-</body>
-</html>`
-
-	w.Header().Set("Content-Type", "text/html")
-	w.Write([]byte(html))
-}
-
-func (s *Server) handleDiscover(w http.ResponseWriter, r *http.Request) {
-	w.Write([]byte("Public notes feed - TODO"))
-}
-
 func (s *Server) handleRobotsTxt(w http.ResponseWriter, r *http.Request) {
-	// Per CLAUDE.md robots.txt spec
-	robots := `User-agent: *
+	// robots.txt per CLAUDE.md
+	w.Header().Set("Content-Type", "text/plain")
+	w.Write([]byte(`User-agent: *
 Disallow: /admin
 Disallow: /api/
 Disallow: /users/
 Allow: /notes/public/
 Allow: /discover
-Sitemap: ` + s.config.BaseURL + `/sitemap.xml`
-
-	w.Header().Set("Content-Type", "text/plain")
-	w.Write([]byte(robots))
+Sitemap: /sitemap.xml
+`))
 }
 
 func (s *Server) handleSecurityTxt(w http.ResponseWriter, r *http.Request) {
-	// Per CLAUDE.md security.txt spec
-	security := `Contact: mailto:admin@localhost
-Expires: 2025-12-31T23:59:59Z
-Canonical: ` + s.config.BaseURL + `/.well-known/security.txt`
-
+	// security.txt per CLAUDE.md
 	w.Header().Set("Content-Type", "text/plain")
-	w.Write([]byte(security))
+	w.Write([]byte(`Contact: mailto:admin@example.com
+Expires: 2025-12-31T23:59:59Z
+Canonical: /.well-known/security.txt
+`))
 }
 
-func (s *Server) handleUserDashboard(w http.ResponseWriter, r *http.Request) {
-	// For web UI, we check auth via JavaScript/localStorage, not server middleware
-	// This allows the page to load and handle auth client-side
-
-	// User dashboard per CLAUDE.md with dark theme and client-side auth
-	html := `<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Dashboard - casnotes</title>
-    <style>
-        body { 
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-            background: #1a1a1a; color: #e0e0e0; margin: 0; padding: 20px;
-        }
-        .header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 30px; }
-        .user-info { background: #2d2d2d; padding: 20px; border-radius: 8px; margin-bottom: 20px; }
-        .menu { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 15px; }
-        .menu a { 
-            display: block; padding: 20px; background: #3d3d3d; color: #64B5F6; 
-            text-decoration: none; border-radius: 8px; text-align: center; 
-        }
-        .menu a:hover { background: #4d4d4d; }
-        .btn { padding: 10px 20px; border: none; border-radius: 4px; cursor: pointer; }
-        .btn-danger { background: #f44336; color: white; }
-    </style>
-</head>
-<body>
-    <div class="header">
-        <h1>🗒️ casnotes Dashboard</h1>
-        <button class="btn btn-danger" onclick="logout()">Logout</button>
-    </div>
-    
-    <div class="user-info">
-        <h2>Welcome, %s!</h2>
-        <p><strong>Email:</strong> %s</p>
-        <p><strong>Role:</strong> %s</p>
-        <p><strong>Member since:</strong> %s</p>
-    </div>
-    
-    <div class="menu">
-        <a href="/users/notes">📝 My Notes</a>
-        <a href="/users/settings">⚙️ Settings</a>
-        <a href="/api/v1/">🔌 API Documentation</a>
-        %s
-    </div>
-    
-    <script>
-    // Check authentication on page load
-    window.onload = function() {
-        const token = localStorage.getItem('casnotes_token');
-        if (!token) {
-            window.location.href = '/login';
-            return;
-        }
-        
-        // Fetch user profile to populate dashboard
-        fetch('/api/v1/auth/profile', {
-            headers: { 'Authorization': 'Bearer ' + token }
-        }).then(response => response.json())
-        .then(result => {
-            if (result.success && result.user) {
-                const user = result.user;
-                document.querySelector('h2').textContent = 'Welcome, ' + user.username + '!';
-                document.querySelector('.user-info p:nth-child(2)').innerHTML = '<strong>Email:</strong> ' + user.email;
-                document.querySelector('.user-info p:nth-child(3)').innerHTML = '<strong>Role:</strong> ' + (user.is_admin ? 'Administrator' : 'User');
-                document.querySelector('.user-info p:nth-child(4)').innerHTML = '<strong>Member since:</strong> ' + new Date(user.created_at).toLocaleDateString();
-                
-                if (user.is_admin) {
-                    const adminLink = document.createElement('a');
-                    adminLink.href = '/admin';
-                    adminLink.textContent = '🛡️ Admin Panel';
-                    document.querySelector('.menu').appendChild(adminLink);
-                }
-            } else {
-                localStorage.removeItem('casnotes_token');
-                window.location.href = '/login';
-            }
-        }).catch(() => {
-            localStorage.removeItem('casnotes_token');
-            window.location.href = '/login';
-        });
-    };
-    
-    function logout() {
-        localStorage.removeItem('casnotes_token');
-        window.location.href = '/';
-    }
-    </script>
-</body>
-</html>`
-
-	w.Header().Set("Content-Type", "text/html")
-	w.Write([]byte(html))
-}
-
-func (s *Server) handleUserNotes(w http.ResponseWriter, r *http.Request) {
-	// Get user from context
-	_, ok := auth.GetUserFromContext(r)
-	if !ok {
-		http.Redirect(w, r, "/login", http.StatusTemporaryRedirect)
-		return
-	}
-
-	// Notes interface per CLAUDE.md with grid view
-	html := `<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <title>My Notes - casnotes</title>
-    <style>
-        body { 
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-            background: #1a1a1a; color: #e0e0e0; margin: 0; padding: 20px;
-        }
-        .header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 30px; }
-        .btn { padding: 10px 20px; border: none; border-radius: 4px; cursor: pointer; text-decoration: none; display: inline-block; }
-        .btn-primary { background: #4CAF50; color: white; }
-        .notes-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 20px; }
-        .note-card { 
-            background: #2d2d2d; padding: 20px; border-radius: 8px; 
-            border-left: 4px solid #4CAF50; cursor: pointer;
-        }
-        .note-card:hover { background: #3d3d3d; }
-        .note-title { color: #4CAF50; margin-bottom: 10px; font-weight: bold; }
-        .note-content { opacity: 0.8; font-size: 14px; line-height: 1.4; }
-        .note-meta { color: #888; font-size: 12px; margin-top: 10px; }
-        .back-link { color: #64B5F6; text-decoration: none; }
-    </style>
-</head>
-<body>
-    <div class="header">
-        <h1>📝 My Notes</h1>
-        <a href="#" class="btn btn-primary" onclick="createNote()">+ New Note</a>
-    </div>
-    
-    <div id="notes-grid" class="notes-grid">
-        <div class="note-card">
-            <div class="note-title">Welcome to casnotes</div>
-            <div class="note-content">Click "New Note" to create your first note. Notes are automatically saved to Git with version control!</div>
-            <div class="note-meta">Welcome note</div>
-        </div>
-    </div>
-    
-    <div style="margin-top: 30px;">
-        <a href="/users" class="back-link">← Back to Dashboard</a>
-    </div>
-
-    <script>
-    function createNote() {
-        const title = prompt('Note title:');
-        const content = prompt('Note content:');
-        if (!title || !content) return;
-        
-        const token = localStorage.getItem('casnotes_token');
-        if (!token) {
-            window.location.href = '/login';
-            return;
-        }
-        
-        fetch('/api/v1/notes', {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-                'Authorization': 'Bearer ' + token
-            },
-            body: JSON.stringify({
-                title: title,
-                content: content,
-                note_type: 'note',
-                visibility: 'private'
-            })
-        }).then(response => response.json())
-        .then(result => {
-            if (result.success) {
-                location.reload();
-            } else {
-                alert('Failed to create note: ' + result.error);
-            }
-        });
-    }
-    
-    // Load notes on page load
-    window.onload = function() {
-        const token = localStorage.getItem('casnotes_token');
-        if (!token) {
-            window.location.href = '/login';
-            return;
-        }
-        
-        fetch('/api/v1/notes', {
-            headers: { 'Authorization': 'Bearer ' + token }
-        }).then(response => response.json())
-        .then(result => {
-            if (result.success && result.notes && result.notes.length > 0) {
-                const grid = document.getElementById('notes-grid');
-                grid.innerHTML = '';
-                result.notes.forEach(note => {
-                    const card = document.createElement('div');
-                    card.className = 'note-card';
-                    card.innerHTML = 
-                        '<div class="note-title">' + note.title + '</div>' +
-                        '<div class="note-content">' + (note.content.substring(0, 100) + '...') + '</div>' +
-                        '<div class="note-meta">' + note.note_type + ' • ' + new Date(note.created_at).toLocaleDateString() + '</div>';
-                    grid.appendChild(card);
-                });
-            }
-        });
-    };
-    </script>
-</body>
-</html>`
-
-	w.Header().Set("Content-Type", "text/html")
-	w.Write([]byte(html))
-}
-
-func (s *Server) handleUserSettings(w http.ResponseWriter, r *http.Request) {
-	// User settings per CLAUDE.md User Preferences
-	html := `<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <title>Settings - casnotes</title>
-    <style>
-        body { 
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-            background: #1a1a1a; color: #e0e0e0; margin: 0; padding: 20px;
-        }
-        .settings-form { background: #2d2d2d; padding: 30px; border-radius: 8px; max-width: 600px; margin: 0 auto; }
-        .form-group { margin-bottom: 20px; }
-        label { display: block; margin-bottom: 5px; color: #ccc; font-weight: bold; }
-        select, input { 
-            width: 100%; padding: 10px; border: 1px solid #555; border-radius: 4px; 
-            background: #1a1a1a; color: #e0e0e0; box-sizing: border-box;
-        }
-        .btn { padding: 12px 24px; border: none; border-radius: 4px; cursor: pointer; }
-        .btn-primary { background: #4CAF50; color: white; }
-        .back-link { color: #64B5F6; text-decoration: none; }
-    </style>
-</head>
-<body>
-    <h1>⚙️ Settings</h1>
-    
-    <div class="settings-form">
-        <h2>User Preferences</h2>
-        <form>
-            <div class="form-group">
-                <label for="theme">Theme (CLAUDE.md default: dark)</label>
-                <select id="theme">
-                    <option value="dark" selected>Dark (Dracula-based)</option>
-                    <option value="light">Light (GitHub-inspired)</option>
-                    <option value="auto">Auto (system preference)</option>
-                </select>
-            </div>
-            
-            <div class="form-group">
-                <label for="default_view">Default View (CLAUDE.md default: grid)</label>
-                <select id="default_view">
-                    <option value="grid" selected>Grid (Google Keep style)</option>
-                    <option value="list">List (condensed with snippets)</option>
-                    <option value="timeline">Timeline (chronological)</option>
-                    <option value="code">Code (OpenGist style)</option>
-                </select>
-            </div>
-            
-            <div class="form-group">
-                <label for="items_per_page">Items per page (CLAUDE.md default: 50)</label>
-                <input type="number" id="items_per_page" value="50" min="10" max="100">
-            </div>
-            
-            <div class="form-group">
-                <label for="timezone">Timezone (CLAUDE.md default: America/New_York)</label>
-                <select id="timezone">
-                    <option value="America/New_York" selected>America/New_York</option>
-                    <option value="UTC">UTC</option>
-                    <option value="Europe/London">Europe/London</option>
-                    <option value="Asia/Tokyo">Asia/Tokyo</option>
-                </select>
-            </div>
-            
-            <button type="submit" class="btn btn-primary">Save Settings</button>
-        </form>
-    </div>
-    
-    <div style="margin-top: 20px; text-align: center;">
-        <a href="/users" class="back-link">← Back to Dashboard</a>
-    </div>
-</body>
-</html>`
-
-	w.Header().Set("Content-Type", "text/html")
-	w.Write([]byte(html))
-}
-
-func (s *Server) handleAdmin(w http.ResponseWriter, r *http.Request) {
-	// Admin dashboard per CLAUDE.md with system overview
-	html := `<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <title>Admin Dashboard - casnotes</title>
-    <style>
-        body { 
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-            background: #1a1a1a; color: #e0e0e0; margin: 0; padding: 20px;
-        }
-        .admin-panel { background: #2d2d2d; padding: 20px; border-radius: 8px; margin-bottom: 20px; }
-        .menu { display: grid; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); gap: 15px; }
-        .menu a { 
-            display: block; padding: 20px; background: #3d3d3d; color: #64B5F6; 
-            text-decoration: none; border-radius: 8px; text-align: center; font-weight: bold;
-        }
-        .menu a:hover { background: #4d4d4d; }
-        .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 15px; margin-bottom: 20px; }
-        .stat-card { background: #2d2d2d; padding: 15px; border-radius: 8px; text-align: center; }
-        .stat-number { font-size: 24px; font-weight: bold; color: #4CAF50; }
-        .back-link { color: #64B5F6; text-decoration: none; }
-    </style>
-</head>
-<body>
-    <h1>🛡️ Admin Dashboard</h1>
-    
-    <div class="admin-panel">
-        <h2>System Overview</h2>
-        <p>Complete administration panel for casnotes per CLAUDE.md specification.</p>
-        
-        <div class="stats">
-            <div class="stat-card">
-                <div class="stat-number" id="user-count">-</div>
-                <div>Total Users</div>
-            </div>
-            <div class="stat-card">
-                <div class="stat-number" id="note-count">-</div>
-                <div>Total Notes</div>
-            </div>
-            <div class="stat-card">
-                <div class="stat-number">✅</div>
-                <div>System Status</div>
-            </div>
-        </div>
-    </div>
-    
-    <div class="menu">
-        <a href="/admin/users">👥 User Management</a>
-        <a href="/admin/server">⚙️ Server Settings</a>
-        <a href="/admin/smtp">📧 Email Config</a>
-        <a href="/admin/compliance">📋 Compliance Settings</a>
-        <a href="/admin/backup">💾 Backup & Restore</a>
-        <a href="/admin/logs">📊 System Logs</a>
-    </div>
-    
-    <div style="margin-top: 30px;">
-        <a href="/users" class="back-link">← Back to Dashboard</a>
-    </div>
-
-    <script>
-    // Load admin stats
-    window.onload = function() {
-        fetch('/api/v1/admin/stats', {
-            headers: { 'Authorization': 'Bearer ' + localStorage.getItem('casnotes_token') }
-        }).then(response => response.json())
-        .then(result => {
-            if (result.success) {
-                document.getElementById('user-count').textContent = result.users || '0';
-                document.getElementById('note-count').textContent = result.notes || '0';
-            }
-        }).catch(() => {
-            // Fallback values
-            document.getElementById('user-count').textContent = '2';
-            document.getElementById('note-count').textContent = '1';
-        });
-    };
-    </script>
-</body>
-</html>`
-
-	w.Header().Set("Content-Type", "text/html")
-	w.Write([]byte(html))
-}
-
-func (s *Server) handleAdminUsers(w http.ResponseWriter, r *http.Request) {
-	w.Write([]byte("Admin users - TODO"))
-}
-
-func (s *Server) handleAdminServer(w http.ResponseWriter, r *http.Request) {
-	w.Write([]byte("Admin server - TODO"))
-}
-
-func (s *Server) handleSupport(w http.ResponseWriter, r *http.Request) {
-	w.Write([]byte("Support hub - TODO"))
-}
-
-// Authentication handlers per CLAUDE.md
 func (s *Server) handleAuthRegister(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
